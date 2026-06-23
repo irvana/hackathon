@@ -1,0 +1,66 @@
+services:
+  datadog-agent:
+    image: gcr.io/datadoghq/agent:7
+    container_name: datadog-agent
+    environment:
+      DD_API_KEY: ${DD_API_KEY:?Set DD_API_KEY in your environment}
+      DD_SITE: ${DD_SITE:-datadoghq.com}
+      DD_ENV: ${DD_ENV:-hackathon}
+      DD_SERVICE: auth-service
+      DD_APM_ENABLED: "true"
+      DD_LOGS_ENABLED: "false"
+      DD_PROCESS_AGENT_ENABLED: "false"
+      DD_DOGSTATSD_NON_LOCAL_TRAFFIC: "true"
+    ports:
+      - "8125:8125/udp"
+      - "8126:8126"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc/:/host/proc/:ro
+      - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
+
+  webhook-mock:
+    build: ./webhook-mock
+    container_name: webhook-mock
+    ports:
+      - "9000:9000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  auth-service:
+    build: ./auth-service
+    container_name: auth-service
+    depends_on:
+      datadog-agent:
+        condition: service_started
+    environment:
+      DD_AGENT_HOST: datadog-agent
+      DD_ENV: ${DD_ENV:-hackathon}
+      DD_SERVICE: auth-service
+      DD_AGENT_METRICS_ENABLED: "true"
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/actuator/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 40s
+
+  ops-simulator:
+    build: ./ops-simulator
+    container_name: ops-simulator
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      webhook-mock:
+        condition: service_healthy
+    environment:
+      AUTH_SERVICE_BASE_URL: http://auth-service:8080
+      WEBHOOK_URL: http://webhook-mock:9000/webhook
+      CONCURRENT_THREADS: ${CONCURRENT_THREADS:-120}
+      FLOOD_DURATION_SECONDS: ${FLOOD_DURATION_SECONDS:-10}
+    restart: "no"

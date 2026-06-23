@@ -1,0 +1,279 @@
+{
+  "title": "Self-Healing Shadow – SRE Copilot Dashboard",
+  "description": "Autonomous SRE Agent monitoring: auth-service health, Bedrock LLM traces, and live postmortem feed.",
+  "layout_type": "free",
+  "is_read_only": false,
+  "notify_list": [],
+  "template_variables": [
+    {
+      "name": "env",
+      "prefix": "env",
+      "default": "hackathon"
+    },
+    {
+      "name": "service",
+      "prefix": "service",
+      "default": "auth-service"
+    }
+  ],
+  "widgets": [
+    {
+      "id": 1,
+      "definition": {
+        "type": "timeseries",
+        "title": "🔴 System Health – auth-service HTTP 5xx Error Rate & Latency",
+        "title_size": "16",
+        "title_align": "left",
+        "show_legend": true,
+        "legend_layout": "auto",
+        "legend_columns": ["avg", "min", "max", "value"],
+        "requests": [
+          {
+            "formulas": [
+              {
+                "alias": "HTTP 5xx Error Rate (%)",
+                "formula": "query1"
+              }
+            ],
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "sum:trace.servlet.request.errors{env:$env,service:$service}.as_rate() / sum:trace.servlet.request.hits{env:$env,service:$service}.as_rate() * 100"
+              }
+            ],
+            "response_format": "timeseries",
+            "style": {
+              "palette": "warm",
+              "line_type": "solid",
+              "line_width": "normal"
+            },
+            "display_type": "line"
+          },
+          {
+            "formulas": [
+              {
+                "alias": "p99 Latency (ms)",
+                "formula": "query2"
+              }
+            ],
+            "queries": [
+              {
+                "name": "query2",
+                "data_source": "metrics",
+                "query": "p99:trace.servlet.request{env:$env,service:$service}"
+              }
+            ],
+            "response_format": "timeseries",
+            "style": {
+              "palette": "cool",
+              "line_type": "solid",
+              "line_width": "normal"
+            },
+            "display_type": "line",
+            "on_right_yaxis": true
+          },
+          {
+            "formulas": [
+              {
+                "alias": "Request Throughput (req/s)",
+                "formula": "query3"
+              }
+            ],
+            "queries": [
+              {
+                "name": "query3",
+                "data_source": "metrics",
+                "query": "sum:trace.servlet.request.hits{env:$env,service:$service}.as_rate()"
+              }
+            ],
+            "response_format": "timeseries",
+            "style": {
+              "palette": "grey",
+              "line_type": "dashed",
+              "line_width": "thin"
+            },
+            "display_type": "bars"
+          }
+        ],
+        "yaxis": {
+          "include_zero": true,
+          "scale": "linear",
+          "label": "Error Rate / Throughput"
+        },
+        "right_yaxis": {
+          "include_zero": true,
+          "scale": "linear",
+          "label": "Latency (ms)"
+        },
+        "markers": [
+          {
+            "value": "y > 5",
+            "display_type": "error dashed",
+            "label": "Error threshold 5%"
+          }
+        ],
+        "time": {
+          "live_span": "1h"
+        }
+      },
+      "layout": {
+        "x": 0,
+        "y": 0,
+        "width": 8,
+        "height": 4
+      }
+    },
+    {
+      "id": 2,
+      "definition": {
+        "type": "timeseries",
+        "title": "🤖 Agent LLM Trace – Bedrock Latency & Token Usage (ddtrace)",
+        "title_size": "16",
+        "title_align": "left",
+        "show_legend": true,
+        "legend_layout": "auto",
+        "legend_columns": ["avg", "max", "value"],
+        "requests": [
+          {
+            "formulas": [
+              {
+                "alias": "LLM p99 Latency (ms)",
+                "formula": "query_llm_latency"
+              }
+            ],
+            "queries": [
+              {
+                "name": "query_llm_latency",
+                "data_source": "metrics",
+                "query": "p99:aws.bedrock.invocation.latency{service:sre-agent-lambda}"
+              }
+            ],
+            "response_format": "timeseries",
+            "style": {
+              "palette": "purple",
+              "line_type": "solid",
+              "line_width": "normal"
+            },
+            "display_type": "line"
+          },
+          {
+            "formulas": [
+              {
+                "alias": "Input Tokens (avg)",
+                "formula": "query_input_tokens"
+              }
+            ],
+            "queries": [
+              {
+                "name": "query_input_tokens",
+                "data_source": "metrics",
+                "query": "avg:aws.bedrock.invocation.input_token_count{service:sre-agent-lambda}"
+              }
+            ],
+            "response_format": "timeseries",
+            "style": {
+              "palette": "orange",
+              "line_type": "solid",
+              "line_width": "thin"
+            },
+            "display_type": "bars"
+          },
+          {
+            "formulas": [
+              {
+                "alias": "Output Tokens (avg)",
+                "formula": "query_output_tokens"
+              }
+            ],
+            "queries": [
+              {
+                "name": "query_output_tokens",
+                "data_source": "metrics",
+                "query": "avg:aws.bedrock.invocation.output_token_count{service:sre-agent-lambda}"
+              }
+            ],
+            "response_format": "timeseries",
+            "style": {
+              "palette": "green",
+              "line_type": "solid",
+              "line_width": "thin"
+            },
+            "display_type": "bars"
+          },
+          {
+            "formulas": [
+              {
+                "alias": "LLM Error Rate (%)",
+                "formula": "query_llm_errors / query_llm_total * 100"
+              }
+            ],
+            "queries": [
+              {
+                "name": "query_llm_errors",
+                "data_source": "metrics",
+                "query": "sum:aws.bedrock.invocation.client_errors{service:sre-agent-lambda}.as_count()"
+              },
+              {
+                "name": "query_llm_total",
+                "data_source": "metrics",
+                "query": "sum:aws.bedrock.invocations{service:sre-agent-lambda}.as_count()"
+              }
+            ],
+            "response_format": "timeseries",
+            "style": {
+              "palette": "red",
+              "line_type": "dashed",
+              "line_width": "normal"
+            },
+            "display_type": "line",
+            "on_right_yaxis": true
+          }
+        ],
+        "yaxis": {
+          "include_zero": true,
+          "scale": "linear",
+          "label": "Latency (ms) / Token Count"
+        },
+        "right_yaxis": {
+          "include_zero": true,
+          "scale": "linear",
+          "label": "LLM Error Rate (%)"
+        },
+        "time": {
+          "live_span": "1h"
+        }
+      },
+      "layout": {
+        "x": 8,
+        "y": 0,
+        "width": 4,
+        "height": 4
+      }
+    },
+    {
+      "id": 3,
+      "definition": {
+        "type": "note",
+        "title": "📋 Live Postmortem – SRE Agent Incident Feed",
+        "title_size": "16",
+        "title_align": "left",
+        "content": "## 🔍 Incident Status: Awaiting Agent Report\n\n---\n\n**Last Updated:** _Agent has not reported yet_\n\n**Alert ID:** _pending_\n\n**Service:** `auth-service`\n\n---\n\n### Root Cause\n> _The SRE Agent will populate this section automatically after investigation._\n\n### Evidence\n- Log signals: _pending_\n- Metric signals: _pending_\n- Tool calls executed: _pending_\n\n### Recommended Remediation Steps\n1. _Awaiting agent runbook..._\n2. _Awaiting agent runbook..._\n3. _Awaiting agent runbook..._\n\n---\n\n### How to Update This Widget\nPost the agent's `incident_summary` field here via the [Datadog Dashboard API](https://docs.datadoghq.com/api/latest/dashboards/) or update it manually after each Lambda run.\n\n```\nPATCH /api/v1/dashboard/{dashboard_id}\n{ \"widgets[2].definition.content\": \"<agent output>\" }\n```\n\n---\n_Powered by Self-Healing Shadow · Amazon Bedrock · ddtrace_",
+        "background_color": "white",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "top",
+        "show_tick": false,
+        "tick_pos": "50%",
+        "tick_edge": "left",
+        "has_padding": true
+      },
+      "layout": {
+        "x": 0,
+        "y": 4,
+        "width": 12,
+        "height": 6
+      }
+    }
+  ]
+}

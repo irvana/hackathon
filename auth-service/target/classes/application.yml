@@ -1,0 +1,48 @@
+spring:
+  application:
+    name: auth-service
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+  statsd:
+    metrics:
+      export:
+        enabled: ${DD_AGENT_METRICS_ENABLED:true}
+        flavor: datadog
+        host: ${DD_AGENT_HOST:localhost}
+        port: ${DD_DOGSTATSD_PORT:8125}
+        polling-frequency: 10s
+  datadog:
+    metrics:
+      export:
+        enabled: ${DATADOG_METRICS_ENABLED:false}
+        api-key: ${DATADOG_API_KEY:local-dev-placeholder}
+        application-key: ${DATADOG_APP_KEY:}
+        step: 10s
+        descriptions: true
+  metrics:
+    export:
+      datadog:
+        enabled: ${DATADOG_METRICS_ENABLED:false}
+        api-key: ${DATADOG_API_KEY:local-dev-placeholder}
+        application-key: ${DATADOG_APP_KEY:}
+        uri: https://api.datadoghq.com
+        step: 10s
+        descriptions: true
+    tags:
+      application: ${spring.application.name}
+      service: ${DD_SERVICE:auth-service}
+      env: ${DD_ENV:hackathon}
+
+logging:
+  level:
+    com.hackathon.auth: INFO
