@@ -1,0 +1,54 @@
+# ── Java build output ─────────────────────────────────────────────────────────
+*/target/
+target/
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+
+# ── Maven ─────────────────────────────────────────────────────────────────────
+.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+# ── Python / Lambda ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+.env
+
+# ── AWS SAM / CDK ─────────────────────────────────────────────────────────────
+.aws-sam/
+cdk.out/
+.cdk.staging/
+
+# ── IDE & OS ──────────────────────────────────────────────────────────────────
+.idea/
+*.iml
+*.iws
+.project
+.classpath
+.settings/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Secrets – never commit these ──────────────────────────────────────────────
+.env
+.env.*
+*.pem
+*.key
+secrets.yml
+secrets.yaml
+credentials
