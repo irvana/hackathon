@@ -1,24 +1,29 @@
 {
-  "title": "Self-Healing Shadow – SRE Copilot Dashboard",
+  "title": "Self-Healing Shadow \u2013 SRE Copilot Dashboard",
   "description": "Autonomous SRE Agent monitoring: target service health, three-agent pipeline traces, Bedrock LLM observability, MCP tool calls, and live incident postmortem.",
-  "layout_type": "free",
-  "is_read_only": false,
+  "layout_type": "ordered",
   "notify_list": [],
   "template_variables": [
     {
       "name": "env",
-      "prefix": "env",
-      "default": "hackathon"
+      "default": "hackathon-irvan",
+      "available_values": [
+        "hackathon-irvan"
+      ]
     },
     {
       "name": "service",
-      "prefix": "service",
-      "default": "auth-service"
+      "default": "auth-service",
+      "available_values": [
+        "auth-service"
+      ]
     },
     {
       "name": "agent_service",
-      "prefix": "service",
-      "default": "sre-agent-ecs"
+      "default": "sre-agent-ecs",
+      "available_values": [
+        "sre-agent-ecs"
+      ]
     }
   ],
   "widgets": [
@@ -26,7 +31,7 @@
       "id": 1,
       "definition": {
         "type": "note",
-        "content": "# 🤖 Self-Healing Shadow — Autonomous SRE Copilot\n\n**Scope:** `$service` · **Agent:** `$agent_service` · **Env:** `$env`\n\nDatadog alert → SRE Agent (Triage → Investigate → Remediate) → Slack runbook. Every Bedrock call and MCP tool invocation is traced via `ddtrace`.",
+        "content": "# \ud83e\udd16 Self-Healing Shadow \u2014 Autonomous SRE Copilot\n\n**Scope:** `$service` \u00b7 **Agent:** `$agent_service` \u00b7 **Env:** `$env`\n\nDatadog alert \u2192 SRE Agent (Triage \u2192 Investigate \u2192 Remediate) \u2192 Slack runbook. Every Bedrock call and MCP tool invocation is traced via `ddtrace`.",
         "background_color": "vivid_blue",
         "font_size": "14",
         "text_align": "left",
@@ -153,7 +158,7 @@
       "id": 4,
       "definition": {
         "type": "query_value",
-        "title": "Agent Pipeline Runs",
+        "title": "Pipeline Runs (/webhook)",
         "title_size": "16",
         "title_align": "left",
         "requests": [
@@ -167,7 +172,7 @@
               {
                 "name": "query1",
                 "data_source": "metrics",
-                "query": "sum:trace.sre_agent.pipeline.hits{env:$env,service:$agent_service}.as_count()"
+                "query": "sum:trace.fastapi.request.hits{env:$env}.as_count()"
               }
             ],
             "response_format": "scalar",
@@ -244,7 +249,7 @@
       "id": 6,
       "definition": {
         "type": "note",
-        "content": "### 🎯 Target Service Health — `$service`\nHTTP errors, latency, throughput, and chaos-mode database timeout counter.",
+        "content": "### \ud83c\udfaf Target Service Health \u2014 `$service`\nHTTP errors, latency, throughput, and chaos-mode database timeout counter.",
         "background_color": "gray",
         "font_size": "14",
         "text_align": "left",
@@ -270,7 +275,13 @@
         "title_align": "left",
         "show_legend": true,
         "legend_layout": "horizontal",
-        "legend_columns": ["avg", "min", "max", "value", "sum"],
+        "legend_columns": [
+          "avg",
+          "min",
+          "max",
+          "value",
+          "sum"
+        ],
         "requests": [
           {
             "formulas": [
@@ -362,7 +373,11 @@
         "title_align": "left",
         "show_legend": true,
         "legend_layout": "auto",
-        "legend_columns": ["avg", "max", "value"],
+        "legend_columns": [
+          "avg",
+          "max",
+          "value"
+        ],
         "requests": [
           {
             "formulas": [
@@ -429,12 +444,17 @@
       "id": 9,
       "definition": {
         "type": "timeseries",
-        "title": "Chaos Mode — auth.errors.database_timeout",
+        "title": "Chaos Mode \u2014 auth.errors.database_timeout",
         "title_size": "16",
         "title_align": "left",
         "show_legend": true,
         "legend_layout": "auto",
-        "legend_columns": ["avg", "max", "value", "sum"],
+        "legend_columns": [
+          "avg",
+          "max",
+          "value",
+          "sum"
+        ],
         "requests": [
           {
             "formulas": [
@@ -479,7 +499,7 @@
       "id": 10,
       "definition": {
         "type": "toplist",
-        "title": "Endpoint Latency — p99 by Resource",
+        "title": "Endpoint Latency \u2014 p99 by Resource",
         "title_size": "16",
         "title_align": "left",
         "requests": [
@@ -528,7 +548,7 @@
       "id": 11,
       "definition": {
         "type": "note",
-        "content": "### 🧠 Autonomous Agent Pipeline — `$agent_service`\nThree-agent flow: **Triage** → **Investigate** (MCP ReAct loop) → **Remediate**. Span names: `sre_agent.triage`, `sre_agent.investigation`, `sre_agent.remediation`.",
+        "content": "### \ud83e\udde0 Autonomous Agent Pipeline \u2014 `$agent_service`\nThree-agent flow: **Triage** \u2192 **Investigate** (MCP ReAct loop) \u2192 **Remediate**. Span names: `sre_agent.triage`, `sre_agent.investigation`, `sre_agent.remediation`.",
         "background_color": "purple",
         "font_size": "14",
         "text_align": "left",
@@ -549,12 +569,16 @@
       "id": 12,
       "definition": {
         "type": "timeseries",
-        "title": "Agent Pipeline Stage Duration (p99)",
+        "title": "Pipeline & LLM Call Latency (p99)",
         "title_size": "16",
         "title_align": "left",
         "show_legend": true,
         "legend_layout": "horizontal",
-        "legend_columns": ["avg", "max", "value"],
+        "legend_columns": [
+          "avg",
+          "max",
+          "value"
+        ],
         "requests": [
           {
             "formulas": [
@@ -567,7 +591,7 @@
               {
                 "name": "query_pipeline",
                 "data_source": "metrics",
-                "query": "p99:trace.sre_agent.pipeline.duration{env:$env,service:$agent_service}"
+                "query": "p99:trace.fastapi.request{env:$env}"
               }
             ],
             "response_format": "timeseries",
@@ -589,7 +613,7 @@
               {
                 "name": "query_triage",
                 "data_source": "metrics",
-                "query": "p99:trace.sre_agent.triage.duration{env:$env,service:$agent_service}"
+                "query": "p99:trace.bedrock_runtime.command{env:$env}"
               }
             ],
             "response_format": "timeseries",
@@ -611,7 +635,7 @@
               {
                 "name": "query_investigate",
                 "data_source": "metrics",
-                "query": "p99:trace.sre_agent.investigation.duration{env:$env,service:$agent_service}"
+                "query": "p99:trace.bedrock_runtime.command{env:$env}"
               }
             ],
             "response_format": "timeseries",
@@ -633,7 +657,7 @@
               {
                 "name": "query_remediate",
                 "data_source": "metrics",
-                "query": "p99:trace.sre_agent.remediation.duration{env:$env,service:$agent_service}"
+                "query": "p99:trace.fastapi.request{env:$env}"
               }
             ],
             "response_format": "timeseries",
@@ -648,7 +672,7 @@
         "yaxis": {
           "include_zero": true,
           "scale": "linear",
-          "label": "Duration (ns → auto-scaled)"
+          "label": "Duration (ns \u2192 auto-scaled)"
         },
         "time": {
           "live_span": "1h"
@@ -665,12 +689,17 @@
       "id": 13,
       "definition": {
         "type": "timeseries",
-        "title": "MCP Tool Calls — get_logs / get_metrics",
+        "title": "MCP Requests (rate & errors)",
         "title_size": "16",
         "title_align": "left",
         "show_legend": true,
         "legend_layout": "auto",
-        "legend_columns": ["avg", "max", "value", "sum"],
+        "legend_columns": [
+          "avg",
+          "max",
+          "value",
+          "sum"
+        ],
         "requests": [
           {
             "formulas": [
@@ -683,7 +712,7 @@
               {
                 "name": "query_hits",
                 "data_source": "metrics",
-                "query": "sum:trace.mcp.tool_call.hits{env:$env,service:$agent_service}.as_count()"
+                "query": "sum:trace.mcp.request.hits{env:$env}.as_count()"
               }
             ],
             "response_format": "timeseries",
@@ -705,7 +734,7 @@
               {
                 "name": "query_errors",
                 "data_source": "metrics",
-                "query": "sum:trace.mcp.tool_call.errors{env:$env,service:$agent_service}.as_count()"
+                "query": "sum:trace.mcp.request.errors{env:$env}.as_count()"
               }
             ],
             "response_format": "timeseries",
@@ -727,7 +756,7 @@
               {
                 "name": "query_duration",
                 "data_source": "metrics",
-                "query": "p99:trace.mcp.tool_call.duration{env:$env,service:$agent_service}"
+                "query": "p99:trace.mcp.request{env:$env}"
               }
             ],
             "response_format": "timeseries",
@@ -765,7 +794,7 @@
       "id": 14,
       "definition": {
         "type": "note",
-        "content": "### ⚡ Amazon Bedrock LLM Observability\nAuto-instrumented via `ddtrace` — latency, token usage, and client errors per `converse` invocation.",
+        "content": "### \u26a1 Bedrock & LLM Observability\nBedrock **Converse** calls are wrapped as explicit `llm` spans (model, input/output, token usage). Token usage, **cost**, evaluations (`rca_quality`, `confidence_score`), and the full agent trace (`workflow` \u2192 `llm` \u2192 `tool`) live in **AI Observability \u2192 Traces** \u2014 filter `ml_app:sre-agent-ecs`. Charts below are APM trace metrics.",
         "background_color": "orange",
         "font_size": "14",
         "text_align": "left",
@@ -786,79 +815,80 @@
       "id": 15,
       "definition": {
         "type": "timeseries",
-        "title": "Bedrock Invocation Latency",
+        "title": "Bedrock Converse \u2014 Latency (p50/p99) & Throughput",
         "title_size": "16",
         "title_align": "left",
         "show_legend": true,
         "legend_layout": "auto",
-        "legend_columns": ["avg", "max", "value"],
+        "legend_columns": [
+          "avg",
+          "max",
+          "value"
+        ],
         "requests": [
           {
+            "response_format": "timeseries",
+            "display_type": "line",
+            "style": {
+              "palette": "cool",
+              "line_type": "solid",
+              "line_width": "normal"
+            },
             "formulas": [
               {
-                "alias": "p50 Latency (ms)",
-                "formula": "query_p50"
+                "formula": "q",
+                "alias": "p50 latency"
               }
             ],
             "queries": [
               {
-                "name": "query_p50",
+                "name": "q",
                 "data_source": "metrics",
-                "query": "p50:aws.bedrock.invocation.latency{env:$env,service:$agent_service}"
+                "query": "p50:trace.bedrock_runtime.command{env:$env}"
               }
-            ],
-            "response_format": "timeseries",
-            "style": {
-              "palette": "purple",
-              "line_type": "solid",
-              "line_width": "thin"
-            },
-            "display_type": "line"
+            ]
           },
           {
+            "response_format": "timeseries",
+            "display_type": "line",
+            "style": {
+              "palette": "warm",
+              "line_type": "solid",
+              "line_width": "normal"
+            },
             "formulas": [
               {
-                "alias": "p99 Latency (ms)",
-                "formula": "query_p99"
+                "formula": "q",
+                "alias": "p99 latency"
               }
             ],
             "queries": [
               {
-                "name": "query_p99",
+                "name": "q",
                 "data_source": "metrics",
-                "query": "p99:aws.bedrock.invocation.latency{env:$env,service:$agent_service}"
+                "query": "p99:trace.bedrock_runtime.command{env:$env}"
               }
-            ],
-            "response_format": "timeseries",
-            "style": {
-              "palette": "purple",
-              "line_type": "solid",
-              "line_width": "thick"
-            },
-            "display_type": "line"
+            ]
           },
           {
-            "formulas": [
-              {
-                "alias": "Invocations / min",
-                "formula": "query_count"
-              }
-            ],
-            "queries": [
-              {
-                "name": "query_count",
-                "data_source": "metrics",
-                "query": "sum:aws.bedrock.invocations{env:$env,service:$agent_service}.as_rate()"
-              }
-            ],
             "response_format": "timeseries",
-            "style": {
-              "palette": "grey",
-              "line_type": "dashed",
-              "line_width": "thin"
-            },
             "display_type": "bars",
-            "on_right_yaxis": true
+            "style": {
+              "palette": "purple"
+            },
+            "formulas": [
+              {
+                "formula": "q",
+                "alias": "investigations/s"
+              }
+            ],
+            "queries": [
+              {
+                "name": "q",
+                "data_source": "metrics",
+                "query": "sum:trace.bedrock_runtime.command.hits{env:$env}.as_rate()"
+              }
+            ]
           }
         ],
         "yaxis": {
@@ -886,84 +916,63 @@
       "id": 16,
       "definition": {
         "type": "timeseries",
-        "title": "Bedrock Token Usage & Error Rate",
+        "title": "Pipeline (/webhook) \u2014 Throughput & Error Rate",
         "title_size": "16",
         "title_align": "left",
         "show_legend": true,
         "legend_layout": "auto",
-        "legend_columns": ["avg", "max", "value"],
+        "legend_columns": [
+          "avg",
+          "max",
+          "value"
+        ],
         "requests": [
           {
+            "response_format": "timeseries",
+            "display_type": "bars",
+            "style": {
+              "palette": "cool"
+            },
             "formulas": [
               {
-                "alias": "Input Tokens (avg)",
-                "formula": "query_input"
+                "formula": "q",
+                "alias": "pipeline runs/s"
               }
             ],
             "queries": [
               {
-                "name": "query_input",
+                "name": "q",
                 "data_source": "metrics",
-                "query": "avg:aws.bedrock.invocation.input_token_count{env:$env,service:$agent_service}"
+                "query": "sum:trace.fastapi.request.hits{env:$env}.as_rate()"
               }
-            ],
-            "response_format": "timeseries",
-            "style": {
-              "palette": "orange",
-              "line_type": "solid",
-              "line_width": "normal"
-            },
-            "display_type": "bars"
+            ]
           },
           {
-            "formulas": [
-              {
-                "alias": "Output Tokens (avg)",
-                "formula": "query_output"
-              }
-            ],
-            "queries": [
-              {
-                "name": "query_output",
-                "data_source": "metrics",
-                "query": "avg:aws.bedrock.invocation.output_token_count{env:$env,service:$agent_service}"
-              }
-            ],
             "response_format": "timeseries",
-            "style": {
-              "palette": "green",
-              "line_type": "solid",
-              "line_width": "normal"
-            },
-            "display_type": "bars"
-          },
-          {
-            "formulas": [
-              {
-                "alias": "Client Error Rate (%)",
-                "formula": "query_errors / query_total * 100"
-              }
-            ],
-            "queries": [
-              {
-                "name": "query_errors",
-                "data_source": "metrics",
-                "query": "sum:aws.bedrock.invocation.client_errors{env:$env,service:$agent_service}.as_count()"
-              },
-              {
-                "name": "query_total",
-                "data_source": "metrics",
-                "query": "sum:aws.bedrock.invocations{env:$env,service:$agent_service}.as_count()"
-              }
-            ],
-            "response_format": "timeseries",
+            "display_type": "line",
             "style": {
               "palette": "warm",
-              "line_type": "dashed",
+              "line_type": "solid",
               "line_width": "thick"
             },
-            "display_type": "line",
-            "on_right_yaxis": true
+            "formulas": [
+              {
+                "formula": "e / h * 100",
+                "alias": "error %"
+              }
+            ],
+            "queries": [
+              {
+                "name": "e",
+                "data_source": "metrics",
+                "query": "sum:trace.fastapi.request.errors{env:$env}.as_count()"
+              },
+              {
+                "name": "h",
+                "data_source": "metrics",
+                "query": "sum:trace.fastapi.request.hits{env:$env}.as_count()"
+              }
+            ]
           }
         ],
         "yaxis": {
@@ -991,12 +1000,16 @@
       "id": 17,
       "definition": {
         "type": "timeseries",
-        "title": "SRE Agent Webhook — FastAPI /webhook",
+        "title": "SRE Agent Webhook \u2014 FastAPI /webhook",
         "title_size": "16",
         "title_align": "left",
         "show_legend": true,
         "legend_layout": "auto",
-        "legend_columns": ["avg", "max", "value"],
+        "legend_columns": [
+          "avg",
+          "max",
+          "value"
+        ],
         "requests": [
           {
             "formulas": [
@@ -1091,7 +1104,7 @@
       "id": 18,
       "definition": {
         "type": "toplist",
-        "title": "Agent Pipeline Stage Latency — p99 Snapshot",
+        "title": "Latency Snapshot \u2014 Webhook & Bedrock (p99)",
         "title_size": "16",
         "title_align": "left",
         "requests": [
@@ -1118,22 +1131,22 @@
               {
                 "name": "query_triage",
                 "data_source": "metrics",
-                "query": "p99:trace.sre_agent.triage.duration{env:$env,service:$agent_service}"
+                "query": "p99:trace.bedrock_runtime.command{env:$env}"
               },
               {
                 "name": "query_investigate",
                 "data_source": "metrics",
-                "query": "p99:trace.sre_agent.investigation.duration{env:$env,service:$agent_service}"
+                "query": "p99:trace.bedrock_runtime.command{env:$env}"
               },
               {
                 "name": "query_remediate",
                 "data_source": "metrics",
-                "query": "p99:trace.sre_agent.remediation.duration{env:$env,service:$agent_service}"
+                "query": "p99:trace.fastapi.request{env:$env}"
               },
               {
                 "name": "query_pipeline",
                 "data_source": "metrics",
-                "query": "p99:trace.sre_agent.pipeline.duration{env:$env,service:$agent_service}"
+                "query": "p99:trace.fastapi.request{env:$env}"
               }
             ],
             "response_format": "scalar"
@@ -1153,48 +1166,7 @@
         "width": 6,
         "height": 4
       }
-    },
-    {
-      "id": 19,
-      "definition": {
-        "type": "note",
-        "content": "### 📋 Live Postmortem — SRE Agent Incident Feed",
-        "background_color": "yellow",
-        "font_size": "16",
-        "text_align": "left",
-        "vertical_align": "center",
-        "show_tick": false,
-        "tick_pos": "50%",
-        "tick_edge": "left",
-        "has_padding": true
-      },
-      "layout": {
-        "x": 0,
-        "y": 30,
-        "width": 12,
-        "height": 1
-      }
-    },
-    {
-      "id": 20,
-      "definition": {
-        "type": "note",
-        "content": "## Incident Status\n\n| Field | Value |\n|---|---|\n| **Last Updated** | _Agent has not reported yet_ |\n| **Alert ID** | _pending_ |\n| **Severity** | _pending_ |\n| **Affected Service** | `$service` |\n| **Confidence Score** | _pending_ |\n| **Model** | _claude-3-5-sonnet (Bedrock)_ |\n\n---\n\n### Root Cause Analysis\n\n> _The SRE Agent will populate this section after the InvestigatorAgent completes its MCP ReAct loop._\n\n---\n\n### Evidence Collected\n\n| Signal Type | Status |\n|---|---|\n| Log signals (`get_logs`) | _pending_ |\n| Metric signals (`get_metrics`) | _pending_ |\n| MCP tool calls executed | _pending_ |\n| Investigator confidence | _pending_ |\n\n---\n\n### Recommended Remediation Steps\n\n1. _Awaiting RemediationAgent runbook..._\n2. _Awaiting RemediationAgent runbook..._\n3. _Awaiting RemediationAgent runbook..._\n\n---\n\n### Span Tags to Inspect in APM\n\nLook for root span `sre_agent.request` with eval tags:\n\n- `metadata.alert_severity`\n- `metadata.confidence_score`\n- `metadata.quality_score`\n- `metadata.affected_service`\n- `llm.request.model`\n\n---\n\n### How to Update This Widget\n\nPaste the agent's `incident_summary` here after each drill, or automate via the [Datadog Dashboard API](https://docs.datadoghq.com/api/latest/dashboards/).\n\n```\nPUT /api/v1/dashboard/{dashboard_id}\n```\n\n---\n\n_Powered by **Self-Healing Shadow** · Amazon Bedrock · Datadog MCP · ddtrace_",
-        "background_color": "white",
-        "font_size": "14",
-        "text_align": "left",
-        "vertical_align": "top",
-        "show_tick": false,
-        "tick_pos": "50%",
-        "tick_edge": "left",
-        "has_padding": true
-      },
-      "layout": {
-        "x": 0,
-        "y": 31,
-        "width": 12,
-        "height": 10
-      }
     }
-  ]
+  ],
+  "reflow_type": "fixed"
 }

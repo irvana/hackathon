@@ -6,8 +6,10 @@ uvicorn[standard]==0.34.3         # standard = includes httptools + uvloop
 mcp==1.9.3                        # Anthropic's official MCP Python SDK
 
 # ── AWS / Amazon Bedrock ──────────────────────────────────────────────────────
-boto3==1.34.131
-botocore==1.34.131                # pinned to match boto3
+# Bumped from 1.34.131 → 1.40.76: required for Amazon Bedrock API keys
+# (AWS_BEARER_TOKEN_BEDROCK). Verified compatible with ddtrace==2.9.3.
+boto3==1.40.76
+botocore==1.40.76                 # pinned to match boto3
 
 # ── Datadog observability ─────────────────────────────────────────────────────
 ddtrace==2.9.3                    # APM + LLM Observability (auto-instruments boto3)
@@ -28,3 +30,6 @@ asyncio-mqtt==0.16.2              # optional: event-bus bridge (can remove if un
 python-dotenv==1.1.0              # load .env in local dev
 structlog==25.3.0                 # structured JSON logging (ECS/Datadog friendly)
 tenacity==9.1.2                   # retry decorator for Bedrock / MCP calls
+
+# ── Tier 2: autonomous code-fix (Git PR) tool ─────────────────────────────────
+PyGithub==2.3.0                   # create_github_pr — opens fix PRs (gated by GIT_TOOLS_ENABLED)

@@ -1,7 +1,7 @@
 """
 mcp_client.py — Datadog MCP Server subprocess manager
 ======================================================
-Manages a long-lived `npx @datadog/mcp-server-datadog` subprocess using the
+Manages a long-lived `npx -y datadog-mcp` (self-hosted Datadog MCP) subprocess using the
 Anthropic MCP Python SDK (stdio transport).  Exposes:
 
   - DatadogMCPClient.list_tools()         → list available MCP tools
@@ -20,7 +20,7 @@ Environment variables consumed (forwarded to the npx subprocess):
 import json
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from typing import Any, AsyncIterator
 
 import anyio
@@ -30,13 +30,32 @@ from mcp.types import CallToolResult, TextContent
 
 from ddtrace import tracer
 
+# LLM Observability — render each Datadog MCP call as a `tool` span so the
+# investigation shows up as an agentic waterfall (LLM → tool → LLM).
+# Guarded import; degrades to APM-only tracing if unavailable.
+try:
+    from ddtrace.llmobs import LLMObs
+    _LLMOBS_IMPORTED = True
+except Exception:  # pragma: no cover
+    LLMObs = None  # type: ignore[assignment]
+    _LLMOBS_IMPORTED = False
+
+
+def _llmobs_active() -> bool:
+    """True only when the SDK is importable AND enabled at runtime."""
+    return bool(_LLMOBS_IMPORTED and getattr(LLMObs, "enabled", False))
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # MCP subprocess command
 # ---------------------------------------------------------------------------
-_MCP_COMMAND = "npx"
-_MCP_ARGS    = ["-y", "@datadog/mcp-server-datadog"]
+# Self-hosted Datadog MCP server (stdio). `@datadog/mcp-server-datadog` never
+# existed on npm; `datadog-mcp` (TANTIOPE) is a real, actively-maintained stdio
+# server that reads DD_API_KEY / DD_APP_KEY / DD_SITE — the same env this client
+# already forwards. Default transport is stdio.
+_MCP_COMMAND = "datadog-mcp"   # globally installed in the image (see Dockerfile)
+_MCP_ARGS    = []              # no runtime npm fetch → no "Connection closed"
 
 # ---------------------------------------------------------------------------
 # Tool Selection Failure sentinel
@@ -55,7 +74,7 @@ class MCPToolError(Exception):
 
 class DatadogMCPClient:
     """
-    Async context-manager that owns one `npx @datadog/mcp-server-datadog`
+    Async context-manager that owns one `npx -y datadog-mcp`
     subprocess per instance lifetime.
 
     Usage:
@@ -200,7 +219,11 @@ class DatadogMCPClient:
         """
         self._assert_ready()
 
-        with tracer.trace(
+        tool_cm = (
+            LLMObs.tool(name=tool_name) if _llmobs_active() else nullcontext()
+        )
+
+        with tool_cm as llm_span, tracer.trace(
             "mcp.tool_call",
             service="sre-agent-ecs",
             resource=tool_name,
@@ -242,6 +265,18 @@ class DatadogMCPClient:
             output_size = len(output_text.encode()) if output_text else 0
             span.set_tag("tool.status",             "success")
             span.set_tag("mcp.tool.output_bytes",   output_size)
+
+            # Annotate the LLM Observability tool span with I/O for the waterfall.
+            if llm_span is not None:
+                try:
+                    LLMObs.annotate(
+                        span=llm_span,
+                        input_data=json.dumps(arguments, default=str),
+                        output_data=output_text,
+                    )
+                except Exception as exc:  # pragma: no cover
+                    logger.warning("[MCP] LLMObs annotate failed: %s", exc)
+
             logger.info(
                 "[MCP] Tool '%s' succeeded (%d bytes).", tool_name, output_size
             )

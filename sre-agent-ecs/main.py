@@ -30,7 +30,7 @@ import logging
 import os
 import re
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from datetime import datetime, timezone
 from typing import Any
 
@@ -39,12 +39,30 @@ import httpx
 import ddtrace
 from ddtrace import tracer
 from ddtrace.contrib.botocore.patch import patch as patch_botocore
+
+# LLM Observability SDK (Tier 0 — required by the hackathon minimum bar:
+# "at least one Bedrock call producing a span in Datadog LLM Observability").
+# Guarded so the app still boots if the SDK shape changes.
+try:
+    from ddtrace.llmobs import LLMObs
+    _LLMOBS_IMPORTED = True
+except Exception:  # pragma: no cover
+    LLMObs = None  # type: ignore[assignment]
+    _LLMOBS_IMPORTED = False
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 
+import asyncio
+
 from mcp_client import DatadogMCPClient, MCPToolError, _TOOL_FAILURE_PREFIX
+from blast_radius import (
+    BlastRadiusCalculator,
+    format_blast_radius_card,
+    format_blast_radius_context,
+)
+from git_tools import GIT_TOOL_CONFIG, GIT_TOOL_NAMES, execute_git_tool
 
 # ---------------------------------------------------------------------------
 # Bootstrap ddtrace BEFORE boto3 client is created
@@ -78,7 +96,7 @@ logging.basicConfig(level=logging.WARNING)
 # Settings via pydantic-settings (reads from env vars automatically)
 # ---------------------------------------------------------------------------
 class Settings(BaseSettings):
-    bedrock_model_id: str = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+    bedrock_model_id: str = "amazon.nova-micro-v1:0"
     bedrock_region:   str = "us-east-1"
     slack_webhook_url: str = (
         "https://hooks.slack.com/services/PLACEHOLDER/PLACEHOLDER/PLACEHOLDER"
@@ -87,6 +105,20 @@ class Settings(BaseSettings):
     dd_api_key: str = ""
     dd_app_key: str = ""
     dd_site:    str = "datadoghq.com"
+
+    # ── LLM Observability (Tier 0/1) ──────────────────────────────────────
+    dd_llmobs_enabled:   bool = True
+    # False = route BOTH APM and LLM Obs through the datadog-agent sidecar
+    # (agent has evp_proxy). Agentless sends LLM Obs direct but then APM spans
+    # never reach the agent → no trace.* metrics → empty dashboard. Field name
+    # matches ddtrace's own env var (DD_LLMOBS_AGENTLESS_ENABLED).
+    dd_llmobs_agentless_enabled: bool = False
+    dd_llmobs_ml_app:    str  = "sre-agent-ecs"
+
+    # ── Tier 2 — autonomous code-fix tools ────────────────────────────────
+    # Gated OFF by default: this is a public webhook, and letting the model
+    # open PRs from untrusted alert text widens prompt-injection blast radius.
+    git_tools_enabled: bool = False
 
     class Config:
         env_file = ".env"
@@ -99,6 +131,30 @@ MODEL_VERSION = (
     if "/" in cfg.bedrock_model_id
     else cfg.bedrock_model_id
 )
+
+# ---------------------------------------------------------------------------
+# Enable LLM Observability BEFORE the Bedrock client is used.
+# With integrations_enabled=True, every bedrock-runtime `converse` call is
+# auto-captured as an LLM Observability span (satisfies minimum bar #2).
+# ---------------------------------------------------------------------------
+LLMOBS_ON = False
+if _LLMOBS_IMPORTED and cfg.dd_llmobs_enabled:
+    try:
+        LLMObs.enable(
+            ml_app=cfg.dd_llmobs_ml_app,
+            integrations_enabled=True,
+            agentless_enabled=cfg.dd_llmobs_agentless_enabled,
+            api_key=cfg.dd_api_key or None,
+            site=cfg.dd_site,
+        )
+        LLMOBS_ON = True
+        log.info(
+            "llmobs_enabled",
+            ml_app=cfg.dd_llmobs_ml_app,
+            agentless=cfg.dd_llmobs_agentless_enabled,
+        )
+    except Exception as exc:  # pragma: no cover — never block startup
+        log.error("llmobs_enable_failed", error=str(exc))
 
 # ---------------------------------------------------------------------------
 # Bedrock client (auto-instrumented by ddtrace botocore patch above)
@@ -222,31 +278,86 @@ def build_tool_config(mcp_tools: list[dict]) -> dict:
 # Bedrock helpers
 # ---------------------------------------------------------------------------
 
+def _messages_to_llmobs(messages: list[dict], system_prompt: str) -> list[dict]:
+    """Flatten Converse messages into LLM Observability input format."""
+    out: list[dict] = [{"role": "system", "content": system_prompt}]
+    for m in messages:
+        content = m.get("content", "")
+        if isinstance(content, list):
+            parts = []
+            for b in content:
+                if isinstance(b, dict):
+                    if "text" in b:
+                        parts.append(b["text"])
+                    elif "toolResult" in b:
+                        parts.append("[toolResult]")
+                    elif "toolUse" in b:
+                        parts.append(f"[toolUse:{b['toolUse'].get('name','')}]")
+            content = "\n".join(parts)
+        out.append({"role": m.get("role", "user"), "content": content})
+    return out
+
+
 def _converse(
     messages: list[dict],
     system_prompt: str,
-    tool_config: dict,
+    tool_config: dict | None,
 ) -> tuple[str, dict, dict]:
-    """Thin wrapper around Bedrock Converse API. Returns (stop_reason, msg, usage)."""
-    response = bedrock_runtime.converse(
-        modelId=cfg.bedrock_model_id,
-        system=[{"text": system_prompt}],
-        messages=messages,
-        toolConfig=tool_config,
-        inferenceConfig={"maxTokens": 2048, "temperature": 0.2},
+    """Thin wrapper around Bedrock Converse API. Returns (stop_reason, msg, usage).
+
+    toolConfig is OMITTED when there are no tools — the Converse API rejects an
+    empty tools list (min length 1).
+
+    Wrapped in an explicit LLMObs.llm span: ddtrace 2.9.3 only auto-instruments
+    Bedrock *InvokeModel* (not Converse), so we create the llm span ourselves to
+    guarantee a Bedrock LLM span in LLM Observability + capture token usage.
+    """
+    kwargs: dict = {
+        "modelId": cfg.bedrock_model_id,
+        "system": [{"text": system_prompt}],
+        "messages": messages,
+        "inferenceConfig": {"maxTokens": 2048, "temperature": 0.2},
+    }
+    if tool_config and tool_config.get("tools"):
+        kwargs["toolConfig"] = tool_config
+
+    llm_cm = (
+        LLMObs.llm(model_name=MODEL_VERSION, name="bedrock.converse",
+                   model_provider="bedrock")
+        if LLMOBS_ON else nullcontext()
     )
-    return (
-        response["stopReason"],
-        response["output"]["message"],
-        response.get("usage", {}),
-    )
+    with llm_cm as llm_span:
+        response = bedrock_runtime.converse(**kwargs)
+        stop_reason = response["stopReason"]
+        out_msg     = response["output"]["message"]
+        usage       = response.get("usage", {})
+
+        if llm_span is not None:
+            try:
+                LLMObs.annotate(
+                    span=llm_span,
+                    input_data=_messages_to_llmobs(messages, system_prompt),
+                    output_data=_extract_text(out_msg) or f"[stop:{stop_reason}]",
+                    metrics={
+                        "input_tokens":  usage.get("inputTokens", 0),
+                        "output_tokens": usage.get("outputTokens", 0),
+                        "total_tokens":  usage.get("totalTokens", 0),
+                    },
+                )
+            except Exception as exc:  # pragma: no cover
+                log.warning("llmobs_llm_annotate_failed", error=str(exc))
+
+    return stop_reason, out_msg, usage
 
 
 def _extract_text(message: dict) -> str:
-    """Extract concatenated text from a Bedrock Converse response message."""
+    """Extract concatenated text from a Bedrock Converse response message.
+
+    Converse content blocks are dicts shaped like {"text": "..."} (no "type" key).
+    """
     parts = []
     for block in message.get("content", []):
-        if isinstance(block, dict) and block.get("type") == "text":
+        if isinstance(block, dict) and "text" in block:
             parts.append(block["text"])
         elif isinstance(block, str):
             parts.append(block)
@@ -261,7 +372,6 @@ async def triage_agent(payload: dict, root_span: Any) -> dict:
     """Classify alert: severity, alert_type, affected_service, summary."""
     with tracer.trace(
         "sre_agent.triage", service="sre-agent-ecs", resource="TriageAgent",
-        child_of=root_span,
     ) as span:
         system_prompt = (
             "You are the Triage module of an autonomous SRE agent. "
@@ -280,9 +390,9 @@ async def triage_agent(payload: dict, root_span: Any) -> dict:
 
         # Triage doesn't need tool calling
         stop_reason, response_msg, usage = _converse(
-            messages=[{"role": "user", "content": user_msg}],
+            messages=[{"role": "user", "content": [{"text": user_msg}]}],
             system_prompt=system_prompt,
-            tool_config={"tools": []},   # no tools for triage
+            tool_config=None,   # no tools for triage
         )
         raw = _extract_text(response_msg)
         span.set_tag("triage.input_tokens",  usage.get("inputTokens", 0))
@@ -313,6 +423,7 @@ async def investigator_agent(
     tool_config: dict,
     mcp: DatadogMCPClient,
     root_span: Any,
+    blast_context: str = "",
 ) -> dict:
     """
     Multi-turn Bedrock loop that calls real Datadog MCP tools until
@@ -320,7 +431,7 @@ async def investigator_agent(
     """
     with tracer.trace(
         "sre_agent.investigation", service="sre-agent-ecs",
-        resource="InvestigatorAgent", child_of=root_span,
+        resource="InvestigatorAgent",
     ) as span:
         severity = triage.get("severity", "high")
         svc      = triage.get("affected_service", "auth-service")
@@ -329,13 +440,35 @@ async def investigator_agent(
         span.set_tag("investigator.severity", severity)
         span.set_tag("investigator.service",  svc)
 
+        # Are code-fix tools present in this run's tool_config?
+        _tools = (tool_config or {}).get("tools", [])
+        git_enabled = any(
+            t.get("toolSpec", {}).get("name") in GIT_TOOL_NAMES
+            for t in _tools
+        )
+        span.set_tag("investigator.git_tools_enabled", git_enabled)
+
+        fix_instructions = (
+            ' If the root cause is in application code, call read_application_code '
+            "to inspect the exact file, then call create_github_pr with the FULL "
+            "corrected file content to open a fix PR. Never fabricate a PR URL — only "
+            "use the URL returned by the tool. Include it in your JSON as "
+            '"fix_pr_url".'
+            if git_enabled else ""
+        )
+        json_keys = (
+            '"root_cause" (string), "evidence_logs" (list[str]), '
+            '"evidence_metrics" (list[str]), "confidence_score" (float 0-1)'
+            + (', "fix_pr_url" (string, optional)' if git_enabled else "")
+        )
+
         system_prompt = (
             "You are the Investigator of an autonomous SRE agent. "
             "Use the available Datadog tools to gather evidence about the incident. "
-            "Call tools as many times as needed. "
-            "When you have enough evidence, respond with a JSON object containing: "
-            '"root_cause" (string), "evidence_logs" (list[str]), '
-            '"evidence_metrics" (list[str]), "confidence_score" (float 0-1). '
+            "Call tools as many times as needed."
+            + fix_instructions
+            + " When you have enough evidence, respond with a JSON object containing: "
+            + json_keys + ". "
             "Only report what the tool data shows — do not guess."
         ) + _INJECTION_GUARD
 
@@ -343,10 +476,13 @@ async def investigator_agent(
             f"Alert: {payload.get('title', '')}\n"
             f"Severity: {severity} | Type: {atype} | Service: {svc}\n\n"
             f"Details:\n{payload.get('body', '')}\n\n"
-            "Investigate using available tools and return findings as JSON."
+            + (blast_context + "\n\n" if blast_context else "")
+            + "Investigate using available tools and return findings as JSON."
         )
 
-        messages: list[dict] = [{"role": "user", "content": user_msg}]
+        fix_pr_url = ""  # captured if create_github_pr succeeds
+
+        messages: list[dict] = [{"role": "user", "content": [{"text": user_msg}]}]
         total_in = total_out = tool_calls = 0
 
         for iteration in range(1, cfg.max_agent_iterations + 1):
@@ -374,20 +510,25 @@ async def investigator_agent(
                         "root_cause": raw, "evidence_logs": [],
                         "evidence_metrics": [], "confidence_score": 0.5,
                     }
+                # Prefer the tool-returned PR URL over any model-written value.
+                if fix_pr_url:
+                    findings["fix_pr_url"] = fix_pr_url
                 span.set_tag("investigator.confidence_score",
                              str(findings.get("confidence_score", 0.5)))
+                span.set_tag("investigator.fix_pr_url", findings.get("fix_pr_url", ""))
                 return findings
 
             # ── Bedrock wants to call tools ───────────────────────────────
             if stop_reason == "tool_use":
                 tool_results = []
                 for block in response_msg.get("content", []):
-                    if not isinstance(block, dict) or block.get("type") != "toolUse":
+                    if not isinstance(block, dict) or "toolUse" not in block:
                         continue
 
-                    tid        = block["toolUseId"]
-                    tname      = block["name"]
-                    tinput     = block.get("input", {})
+                    tu         = block["toolUse"]
+                    tid        = tu["toolUseId"]
+                    tname      = tu["name"]
+                    tinput     = tu.get("input", {})
                     tool_calls += 1
 
                     log.info("mcp_tool_call requested",
@@ -395,10 +536,46 @@ async def investigator_agent(
                     span.set_tag(f"investigator.tool_{tool_calls}.name",  tname)
                     span.set_tag(f"investigator.tool_{tool_calls}.input", json.dumps(tinput))
 
-                    # ── Dispatch to real MCP server ───────────────────────
+                    # ── Dispatch: git tools run locally, rest go to MCP ───
                     try:
-                        tool_output = await mcp.call_tool(tname, tinput)
-                        span.set_tag(f"investigator.tool_{tool_calls}.status", "success")
+                        if tname in GIT_TOOL_NAMES:
+                            git_res = await asyncio.to_thread(
+                                execute_git_tool, tname, tinput
+                            )
+                            if git_res.get("success"):
+                                result_payload = git_res.get("result", "")
+                                if (
+                                    tname == "create_github_pr"
+                                    and isinstance(result_payload, dict)
+                                    and result_payload.get("pr_url")
+                                ):
+                                    fix_pr_url = result_payload["pr_url"]
+                                tool_output = (
+                                    result_payload
+                                    if isinstance(result_payload, str)
+                                    else json.dumps(result_payload, default=str)
+                                )
+                                span.set_tag(f"investigator.tool_{tool_calls}.status", "success")
+                            else:
+                                span.set_tag(f"investigator.tool_{tool_calls}.status",
+                                             _TOOL_FAILURE_PREFIX)
+                                tool_output = json.dumps({
+                                    "error": "git_tool_failure",
+                                    "tool":  tname,
+                                    "reason": git_res.get("error", "unknown"),
+                                })
+                        elif mcp is None:
+                            # MCP unavailable (degraded mode) — tell the model so
+                            # it reasons from the alert + blast-radius context.
+                            span.set_tag(f"investigator.tool_{tool_calls}.status", "mcp_unavailable")
+                            tool_output = json.dumps({
+                                "error": "mcp_unavailable",
+                                "tool":  tname,
+                                "reason": "Datadog MCP server is not connected; proceed with available context.",
+                            })
+                        else:
+                            tool_output = await mcp.call_tool(tname, tinput)
+                            span.set_tag(f"investigator.tool_{tool_calls}.status", "success")
                     except MCPToolError as exc:
                         # Structured failure — feed error back to Bedrock
                         # so the model can adapt (try a different tool, etc.)
@@ -426,9 +603,10 @@ async def investigator_agent(
                         })
 
                     tool_results.append({
-                        "type":      "toolResult",
-                        "toolUseId": tid,
-                        "content":   [{"text": tool_output}],
+                        "toolResult": {
+                            "toolUseId": tid,
+                            "content":   [{"text": tool_output}],
+                        }
                     })
 
                 messages.append({"role": "user", "content": tool_results})
@@ -445,6 +623,7 @@ async def investigator_agent(
             "evidence_logs":    [],
             "evidence_metrics": [],
             "confidence_score": 0.1,
+            "fix_pr_url":       fix_pr_url,
         }
 
 # ---------------------------------------------------------------------------
@@ -460,7 +639,7 @@ async def remediation_agent(
     """Synthesise triage + evidence into a markdown Incident Summary."""
     with tracer.trace(
         "sre_agent.remediation", service="sre-agent-ecs",
-        resource="RemediationAgent", child_of=root_span,
+        resource="RemediationAgent",
     ) as span:
         system_prompt = (
             "You are the Remediation module of an autonomous SRE agent. "
@@ -482,9 +661,9 @@ async def remediation_agent(
         )
 
         stop_reason, response_msg, usage = _converse(
-            messages=[{"role": "user", "content": user_msg}],
+            messages=[{"role": "user", "content": [{"text": user_msg}]}],
             system_prompt=system_prompt,
-            tool_config={"tools": []},  # remediation writes prose, no tools
+            tool_config=None,  # remediation writes prose, no tools
         )
         summary = _extract_text(response_msg)
         span.set_tag("remediation.input_tokens",   usage.get("inputTokens", 0))
@@ -518,6 +697,37 @@ def tag_evaluation_metadata(
     root_span.set_tag("metadata.bedrock_region",    cfg.bedrock_region)
     root_span.set_tag("llm.request.model",          cfg.bedrock_model_id)
     root_span.set_tag("llm.response.quality",       str(quality))
+
+
+def submit_llmobs_evaluations(workflow_span: Any, triage: dict, findings: dict) -> None:
+    """
+    Attach quality evaluations to the LLM Observability workflow span so they
+    show up under Datadog → LLM Observability → Evaluations (matches the
+    'evaluate quality & security' scoring theme).
+
+    Fully guarded: any SDK shape mismatch is logged, never raised — the
+    auto-instrumented LLM spans (minimum bar #2) remain intact regardless.
+    """
+    if not (LLMOBS_ON and workflow_span is not None):
+        return
+    try:
+        span_ctx   = LLMObs.export_span(span=workflow_span)
+        confidence = float(findings.get("confidence_score", 0.5))
+        sev        = triage.get("severity", "unknown")
+        quality    = round((confidence + _SEV_SCORE.get(sev, 0.5)) / 2, 4)
+
+        LLMObs.submit_evaluation(
+            span_ctx, label="rca_quality", metric_type="score", value=quality,
+        )
+        LLMObs.submit_evaluation(
+            span_ctx, label="confidence_score", metric_type="score", value=confidence,
+        )
+        LLMObs.submit_evaluation(
+            span_ctx, label="alert_severity", metric_type="categorical", value=str(sev),
+        )
+        log.info("llmobs_evaluations_submitted", quality=quality, confidence=confidence)
+    except Exception as exc:  # pragma: no cover
+        log.error("llmobs_eval_failed", error=str(exc))
 
 # ---------------------------------------------------------------------------
 # Slack notification (mock log + optional real HTTP post)
@@ -578,16 +788,24 @@ async def post_to_slack(summary: str, payload: dict, triage: dict) -> None:
 # Full pipeline
 # ---------------------------------------------------------------------------
 
-async def run_pipeline(alert_payload: dict) -> tuple[str, dict, dict]:
+async def run_pipeline(alert_payload: dict) -> tuple[str, dict, dict, dict]:
     """
     Triage → Investigate (with real MCP tools) → Remediate.
-    Returns (incident_summary, triage_result, findings).
+    Returns (incident_summary, triage_result, findings, blast_radius).
     """
     alert_id    = alert_payload.get("id", str(uuid.uuid4()))
     alert_title = alert_payload.get("title", "Unknown Alert")
     sanitized   = sanitize_payload(alert_payload)
 
-    with tracer.trace(
+    # LLM Observability workflow span = the agentic root that the Triage/
+    # Investigate/Remediate LLM + tool spans nest under (the waterfall shown
+    # in the Datadog deck). nullcontext keeps behaviour identical if disabled.
+    workflow_cm = (
+        LLMObs.workflow(name="sre_incident_pipeline")
+        if LLMOBS_ON else nullcontext()
+    )
+
+    with workflow_cm as workflow_span, tracer.trace(
         "sre_agent.pipeline", service="sre-agent-ecs", resource=alert_title,
     ) as root_span:
         root_span.set_tag("alert.id",           alert_id)
@@ -598,28 +816,70 @@ async def run_pipeline(alert_payload: dict) -> tuple[str, dict, dict]:
         # 1. Triage (no MCP needed)
         triage = await triage_agent(sanitized, root_span)
 
-        # 2. Investigate with live MCP session
-        async with DatadogMCPClient(
-            dd_api_key=cfg.dd_api_key,
-            dd_app_key=cfg.dd_app_key,
-            dd_site=cfg.dd_site,
-        ) as mcp:
-            mcp_tools   = await mcp.list_tools()
-            tool_config = build_tool_config(mcp_tools)
-            root_span.set_tag("pipeline.mcp_tools_available", len(mcp_tools))
+        # 1b. Preliminary Blast Radius — WHAT BROKE (suspected) + WHAT IT COSTS,
+        #     computed before the LLM investigation so it can anchor the prompt.
+        blast = BlastRadiusCalculator.compute_preliminary(sanitized, triage)
+        log.info("blast_radius_preliminary", card=format_blast_radius_card(blast))
+        blast_context = format_blast_radius_context(blast)
+        root_span.set_tag("blast.customers", blast.business.affected_customers)
+        root_span.set_tag("blast.bleed_per_min", blast.business.financial_bleed_rate_usd_per_min)
 
+        # 2. Investigate with live MCP session (+ optional local code-fix tools).
+        #    Graceful degradation: if the Datadog MCP server can't start/connect
+        #    (e.g. bad DD keys), we DON'T fail the pipeline — the investigator
+        #    still reasons over the alert + blast-radius context, and the LLM
+        #    Observability trace + dashboard metrics still populate.
+        git_tools = GIT_TOOL_CONFIG["tools"] if cfg.git_tools_enabled else []
+        root_span.set_tag("pipeline.git_tools_enabled", cfg.git_tools_enabled)
+        findings = None
+        try:
+            async with DatadogMCPClient(
+                dd_api_key=cfg.dd_api_key,
+                dd_app_key=cfg.dd_app_key,
+                dd_site=cfg.dd_site,
+            ) as mcp:
+                mcp_tools   = await mcp.list_tools()
+                tool_config = {"tools": build_tool_config(mcp_tools).get("tools", []) + git_tools}
+                root_span.set_tag("pipeline.mcp_tools_available", len(mcp_tools))
+                root_span.set_tag("pipeline.mcp_degraded", False)
+
+                findings = await investigator_agent(
+                    sanitized, triage, tool_config, mcp, root_span,
+                    blast_context=blast_context,
+                )
+        except (Exception, BaseExceptionGroup) as exc:
+            # MCP server failed to start/connect (bad DD keys, npx, transport).
+            # The anyio stdio teardown can raise an ExceptionGroup, so catch both.
+            log.error("mcp_unavailable_degrading", error=str(exc)[:300])
+            root_span.set_tag("pipeline.mcp_degraded", True)
+            root_span.set_tag("pipeline.mcp_error", str(exc)[:200])
+            root_span.set_tag("pipeline.mcp_tools_available", 0)
+
+        # Degraded fallback: only run if the MCP-backed investigation never
+        # produced findings (avoids a wasteful double Bedrock run when MCP
+        # worked but the subprocess teardown raised afterwards).
+        if findings is None:
+            degraded_config = {"tools": git_tools} if git_tools else None
             findings = await investigator_agent(
-                sanitized, triage, tool_config, mcp, root_span
+                sanitized, triage, degraded_config, None, root_span,
+                blast_context=blast_context,
             )
 
         # 3. Remediation
         summary = await remediation_agent(sanitized, triage, findings, root_span)
 
-        # 4. Eval tagging
+        # 3b. Confirm the Blast Radius with investigation results + any PR URL.
+        blast = BlastRadiusCalculator.merge_final(
+            blast, findings, summary, pr_url=findings.get("fix_pr_url", "")
+        )
+        log.info("blast_radius_final", card=format_blast_radius_card(blast))
+
+        # 4. Eval tagging (APM span tags + LLM Observability evaluations)
         tag_evaluation_metadata(root_span, triage, findings, alert_id)
+        submit_llmobs_evaluations(workflow_span, triage, findings)
         root_span.set_tag("pipeline.outcome", "completed")
 
-        return summary, triage, findings
+        return summary, triage, findings, blast.to_dict()
 
 # ---------------------------------------------------------------------------
 # Pydantic request / response models
@@ -645,6 +905,8 @@ class WebhookResponse(BaseModel):
     affected_service: str
     confidence_score: float
     incident_summary: str
+    fix_pr_url:       str  = ""
+    blast_radius:     dict = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -708,7 +970,7 @@ async def webhook(request: Request) -> WebhookResponse:
         log.info("webhook_received", alert_id=alert_id, title=alert_title)
 
         try:
-            summary, triage, findings = await run_pipeline(raw_body)
+            summary, triage, findings, blast_radius = await run_pipeline(raw_body)
         except Exception as exc:
             req_span.set_tag("error", True)
             req_span.set_tag("error.type",    type(exc).__name__)
@@ -728,4 +990,6 @@ async def webhook(request: Request) -> WebhookResponse:
             affected_service=triage.get("affected_service", "unknown"),
             confidence_score=findings.get("confidence_score", 0.0),
             incident_summary=summary,
+            fix_pr_url=findings.get("fix_pr_url", ""),
+            blast_radius=blast_radius,
         )

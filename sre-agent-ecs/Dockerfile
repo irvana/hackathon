@@ -50,6 +50,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DD_VERSION="1.0.0" \
     DD_TRACE_ENABLED="true" \
     DD_LOGS_INJECTION="true" \
+    # ── Datadog LLM Observability (hackathon minimum bar #2) ──────────────────
+    DD_LLMOBS_ENABLED="1" \
+    DD_LLMOBS_ML_APP="sre-agent-ecs" \
+    DD_LLMOBS_AGENTLESS_ENABLED="0" \
+    # ── Tier 2: autonomous code-fix (off by default; demo opt-in) ─────────────
+    GIT_TOOLS_ENABLED="false" \
+    APP_SOURCE_DIR="./app_source" \
+    GITHUB_TOKEN="" \
+    GITHUB_REPO="" \
     # ── AWS ──────────────────────────────────────────────────────────────────
     AWS_DEFAULT_REGION="us-east-1" \
     # ── App ──────────────────────────────────────────────────────────────────
@@ -60,8 +69,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # ---------------------------------------------------------------------------
 # System packages:
 #   - curl / ca-certificates : health-checks and HTTPS
-#   - Node.js + npm          : REQUIRED — Datadog MCP server is launched via
-#                              `npx @datadog/datadog-mcp-server` at runtime.
+#   - Node.js + npm          : REQUIRED — the self-hosted Datadog MCP server is
+#                              launched via `npx -y datadog-mcp` at runtime.
 #                              Without Node.js the MCP subprocess will fail.
 # ---------------------------------------------------------------------------
 RUN apt-get update \
@@ -74,8 +83,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         nodejs \
     && npm install -g npm@latest \
-    # Warm the npx cache for the Datadog MCP server so first-run latency is low
-    && npx --yes @datadog/datadog-mcp-server --version 2>/dev/null || true \
+    # Install the self-hosted Datadog MCP server GLOBALLY at build time so it is
+    # available to the non-root runtime user WITHOUT any runtime npm fetch
+    # (avoids "Connection closed" when the container has no egress to npm).
+    && npm install -g datadog-mcp \
     # Cleanup
     && apt-get purge -y --auto-remove gnupg \
     && rm -rf /var/lib/apt/lists/* /tmp/* /root/.npm/_npx/*cache*

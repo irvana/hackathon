@@ -154,8 +154,19 @@ services:
       AWS_ACCESS_KEY_ID:     ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       AWS_SESSION_TOKEN:     ${AWS_SESSION_TOKEN:-}
-      BEDROCK_MODEL_ID:      ${BEDROCK_MODEL_ID:-us.anthropic.claude-3-5-sonnet-20241022-v2:0}
+      # Amazon Bedrock API key (bearer auth) — preferred over access keys.
+      AWS_BEARER_TOKEN_BEDROCK: ${AWS_BEARER_TOKEN_BEDROCK:-}
+      BEDROCK_MODEL_ID:      ${BEDROCK_MODEL_ID:-amazon.nova-micro-v1:0}
       BEDROCK_REGION:        ${BEDROCK_REGION:-us-east-1}
+      # ── LLM Observability (Tier 0/1) ──────────────────────────────────────
+      DD_LLMOBS_ENABLED:           ${DD_LLMOBS_ENABLED:-1}
+      DD_LLMOBS_ML_APP:            ${DD_LLMOBS_ML_APP:-sre-agent-ecs}
+      DD_LLMOBS_AGENTLESS_ENABLED: ${DD_LLMOBS_AGENTLESS_ENABLED:-0}
+      # ── Tier 2: autonomous code-fix (off by default) ──────────────────────
+      GIT_TOOLS_ENABLED:    ${GIT_TOOLS_ENABLED:-false}
+      GITHUB_TOKEN:         ${GITHUB_TOKEN:-}
+      GITHUB_REPO:          ${GITHUB_REPO:-}
+      APP_SOURCE_DIR:       ${APP_SOURCE_DIR:-./app_source}
       # ── Agent config ──────────────────────────────────────────────────────
       SLACK_WEBHOOK_URL:    ${SLACK_WEBHOOK_URL:-https://hooks.slack.com/services/PLACEHOLDER/PLACEHOLDER/PLACEHOLDER}
       MAX_AGENT_ITERATIONS: ${MAX_AGENT_ITERATIONS:-6}

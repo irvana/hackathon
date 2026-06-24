@@ -2,7 +2,7 @@
 
 > An AI agent that wakes up when your service breaks, investigates the root cause, and sends a full incident runbook to Slack — all without human intervention.
 
-![Architecture Overview](Gemini_Generated_Image_codabqcodabqcoda.png)
+![Architecture Overview](architecture-diagram.png)
 
 ---
 
