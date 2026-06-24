@@ -1,38 +1,38 @@
 graph TD
-    %% Subgraph Environment Target & Simulator
-    subgraph Local_or_Target_Env [1. Target App & Simulator Environment]
-        A[ops-simulator <br> Java 17] -- 1. Trigger Chaos --> B(auth-service <br> Spring Boot 3.x)
-        B -- 2. Push Metrics & Logs --> DD_Cloud[Datadog Platform]
-        A -- 3. Fire Mock Webhook JSON --> C[AWS API Gateway]
+    %% Target Apps
+    subgraph Target_Environment [1. Target App Environment]
+        A[ops-simulator <br> Java 17] -- Trigger Chaos --> B(auth-service <br> Spring Boot 3.x)
+        B -- Kirim Logs & Metrics --> DD_Cloud[Datadog Cloud Platform]
     end
 
-    %% Subgraph AWS Cloud (Orchestration)
-    subgraph AWS_Cloud [2. Autonomous Agentic Layer]
-        C --> D[AWS Lambda <br> Python 3.11 + ddtrace]
-        
-        subgraph Lambda_Internal [Lambda Processing Loop]
-            D -- 4. Sanitize Input --> E[Sanitizer / Guardrail]
-            E -- 5. Prompt with Tools --> F[Amazon Bedrock <br> Claude 3.x]
+    %% Webhook Trigger
+    DD_Cloud -- Trigger Alert Webhook --> ECS_Task
+
+    %% Single Container Boundary
+    subgraph ECS_Task [2. AWS ECS Task / Docker Container Terpadu]
+        subgraph Python_App [Python FastAPI Orchestrator Process]
+            C[FastAPI <br> Endpoint /webhook] 
+            D[ddtrace Wrapper <br> Tracing Layer]
+            E[Amazon Bedrock <br> Claude 3.x Client]
         end
+
+        subgraph MCP_Subprocess [Internal Subprocess Layer]
+            F[Datadog MCP Server <br> Driven by npx Node.js]
+        end
+
+        %% Internal Communication
+        C --> D
+        D --> E
+        E <=>|Stdio Transport <br> stdin / stdout| F
     end
 
-    %% Subgraph Model Context Protocol Bridge
-    subgraph Datadog_Integration [3. Datadog MCP & Telemetry]
-        F -- 6. Multi-Turn ReAct Loop --> G[Datadog MCP Server]
-        G -- 7. Query Logs & Metrics --> DD_Cloud
-        DD_Cloud -- 8. Return Telemetry Data --> G
-        G --> F
-    end
-
-    %% Subgraph Outputs & Observability
-    subgraph Outputs_and_Observability [4. Destinations & Monitoring]
-        D -- 9. Stream Full Trace --> DD_LLM[Datadog LLM Observability]
-        DD_LLM --> DD_Dash[Custom Datadog Dashboard]
-        D -- 10. Post Incident Summary & Runbook --> H[Slack / Teams Channel]
-    end
+    %% Datadog & Cloud Interactions
+    F ==>|API Calls via Internet| DD_Cloud
+    D ==>|Kirim Spans & Tokens| DD_LLM[Datadog LLM Observability]
+    C ==>|Kirim RCA & Runbook| Slack[Slack Channel / Teams]
 
     %% Styling
-    style Local_or_Target_Env fill:#f9f,stroke:#333,stroke-width:2px
-    style AWS_Cloud fill:#bbf,stroke:#333,stroke-width:2px
-    style Datadog_Integration fill:#dfd,stroke:#333,stroke-width:2px
-    style Outputs_and_Observability fill:#fdd,stroke:#333,stroke-width:2px
+    style Target_Environment fill:#fdf,stroke:#333,stroke-width:2px
+    style ECS_Task fill:#bbf,stroke:#333,stroke-width:2px,stroke-dasharray: 5 5
+    style Python_App fill:#fff,stroke:#333,stroke-width:1px
+    style MCP_Subprocess fill:#dfd,stroke:#333,stroke-width:1px

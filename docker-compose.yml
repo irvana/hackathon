@@ -1,45 +1,116 @@
+# =============================================================================
+# Self-Healing Shadow — Full Stack
+# =============================================================================
+#
+# Services (startup order enforced by depends_on + healthchecks):
+#
+#   1. datadog-agent    – Datadog APM sidecar  (port 8125/udp, 8126)
+#   2. webhook-mock     – Simple HTTP receiver  (port 9000)
+#   3. auth-service     – Target Spring Boot app (port 8080)
+#   4. sre-agent-ecs    – Autonomous SRE Agent FastAPI (port 8000)
+#   5. ops-simulator    – Chaos + webhook fire  (one-shot, runs after all ready)
+#
+# Quick start:
+#   cp .env.example .env          # fill in DD_API_KEY, DD_APP_KEY, AWS_* creds
+#   docker compose up --build
+#
+# Security test only (no chaos drill):
+#   SIMULATOR_MODE=security docker compose up --build
+#
+# Chaos + security:
+#   SIMULATOR_MODE=all docker compose up --build
+#
+# =============================================================================
+
+x-dd-common: &dd-common
+  DD_API_KEY:    ${DD_API_KEY:?DD_API_KEY is required — copy .env.example to .env}
+  DD_APP_KEY:    ${DD_APP_KEY:?DD_APP_KEY is required — copy .env.example to .env}
+  DD_SITE:       ${DD_SITE:-datadoghq.com}
+  DD_ENV:        ${DD_ENV:-hackathon}
+
+x-aws-common: &aws-common
+  AWS_DEFAULT_REGION:    ${AWS_DEFAULT_REGION:-us-east-1}
+  AWS_ACCESS_KEY_ID:     ${AWS_ACCESS_KEY_ID:-}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+  AWS_SESSION_TOKEN:     ${AWS_SESSION_TOKEN:-}
+
+networks:
+  sre-net:
+    driver: bridge
+
+volumes:
+  dd-agent-run: {}
+
 services:
+
+  # ---------------------------------------------------------------------------
+  # 1. Datadog Agent — APM + DogStatsD sidecar
+  # ---------------------------------------------------------------------------
   datadog-agent:
     image: gcr.io/datadoghq/agent:7
     container_name: datadog-agent
+    networks: [sre-net]
     environment:
-      DD_API_KEY: ${DD_API_KEY:?Set DD_API_KEY in your environment}
-      DD_SITE: ${DD_SITE:-datadoghq.com}
-      DD_ENV: ${DD_ENV:-hackathon}
-      DD_SERVICE: auth-service
-      DD_APM_ENABLED: "true"
-      DD_LOGS_ENABLED: "false"
-      DD_PROCESS_AGENT_ENABLED: "false"
+      <<: *dd-common
+      DD_SERVICE:                    datadog-agent
+      DD_APM_ENABLED:                "true"
+      DD_APM_NON_LOCAL_TRAFFIC:      "true"
       DD_DOGSTATSD_NON_LOCAL_TRAFFIC: "true"
+      DD_LOGS_ENABLED:               "false"
+      DD_PROCESS_AGENT_ENABLED:      "false"
     ports:
-      - "8125:8125/udp"
-      - "8126:8126"
+      - "8125:8125/udp"   # DogStatsD
+      - "8126:8126"       # APM trace receiver
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc/:/host/proc/:ro
       - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
+      - dd-agent-run:/var/run/datadog
+    healthcheck:
+      test: ["CMD", "agent", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
 
+  # ---------------------------------------------------------------------------
+  # 2. Webhook Mock — receives forwarded alerts and prints them
+  # ---------------------------------------------------------------------------
   webhook-mock:
-    build: ./webhook-mock
+    build:
+      context: ./webhook-mock
+      dockerfile: Dockerfile
     container_name: webhook-mock
+    networks: [sre-net]
     ports:
       - "9000:9000"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/health')"]
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:9000/health')"]
       interval: 5s
       timeout: 3s
       retries: 5
+      start_period: 5s
+    restart: unless-stopped
 
+  # ---------------------------------------------------------------------------
+  # 3. Auth Service — target Spring Boot app (Micrometer → Datadog APM)
+  # ---------------------------------------------------------------------------
   auth-service:
-    build: ./auth-service
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile
     container_name: auth-service
+    networks: [sre-net]
     depends_on:
       datadog-agent:
-        condition: service_started
+        condition: service_healthy
     environment:
-      DD_AGENT_HOST: datadog-agent
-      DD_ENV: ${DD_ENV:-hackathon}
-      DD_SERVICE: auth-service
+      <<: *dd-common
+      DD_SERVICE:              auth-service
+      DD_AGENT_HOST:           datadog-agent
+      DD_TRACE_AGENT_PORT:     "8126"
       DD_AGENT_METRICS_ENABLED: "true"
     ports:
       - "8080:8080"
@@ -47,20 +118,80 @@ services:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/actuator/health"]
       interval: 5s
       timeout: 5s
-      retries: 15
-      start_period: 40s
+      retries: 20
+      start_period: 45s
+    restart: unless-stopped
 
-  ops-simulator:
-    build: ./ops-simulator
-    container_name: ops-simulator
+  # ---------------------------------------------------------------------------
+  # 4. SRE Agent ECS — FastAPI autonomous SRE orchestrator
+  #    Receives webhooks, runs Triage→Investigate→Remediate via Bedrock + MCP
+  # ---------------------------------------------------------------------------
+  sre-agent-ecs:
+    build:
+      context: ./sre-agent-ecs
+      dockerfile: Dockerfile
+    container_name: sre-agent-ecs
+    networks: [sre-net]
     depends_on:
-      auth-service:
+      datadog-agent:
         condition: service_healthy
       webhook-mock:
         condition: service_healthy
     environment:
-      AUTH_SERVICE_BASE_URL: http://auth-service:8080
-      WEBHOOK_URL: http://webhook-mock:9000/webhook
-      CONCURRENT_THREADS: ${CONCURRENT_THREADS:-120}
-      FLOOD_DURATION_SECONDS: ${FLOOD_DURATION_SECONDS:-10}
+      # ── Datadog ──────────────────────────────────────────────────────────
+      DD_API_KEY:          ${DD_API_KEY:?DD_API_KEY is required}
+      DD_APP_KEY:          ${DD_APP_KEY:?DD_APP_KEY is required}
+      DD_SITE:             ${DD_SITE:-datadoghq.com}
+      DD_ENV:              ${DD_ENV:-hackathon}
+      DD_SERVICE:          sre-agent-ecs
+      DD_VERSION:          "1.0.0"
+      DD_TRACE_ENABLED:    "true"
+      DD_LOGS_INJECTION:   "true"
+      DD_AGENT_HOST:       datadog-agent
+      DD_TRACE_AGENT_PORT: "8126"
+      # ── AWS / Bedrock ─────────────────────────────────────────────────────
+      AWS_DEFAULT_REGION:    ${AWS_DEFAULT_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID:     ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN:     ${AWS_SESSION_TOKEN:-}
+      BEDROCK_MODEL_ID:      ${BEDROCK_MODEL_ID:-us.anthropic.claude-3-5-sonnet-20241022-v2:0}
+      BEDROCK_REGION:        ${BEDROCK_REGION:-us-east-1}
+      # ── Agent config ──────────────────────────────────────────────────────
+      SLACK_WEBHOOK_URL:    ${SLACK_WEBHOOK_URL:-https://hooks.slack.com/services/PLACEHOLDER/PLACEHOLDER/PLACEHOLDER}
+      MAX_AGENT_ITERATIONS: ${MAX_AGENT_ITERATIONS:-6}
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # 5. Ops Simulator — one-shot chaos drill + webhook fire
+  #    Runs after auth-service AND sre-agent-ecs are both healthy.
+  #    SIMULATOR_MODE: chaos (default) | security | all
+  # ---------------------------------------------------------------------------
+  ops-simulator:
+    build:
+      context: ./ops-simulator
+      dockerfile: Dockerfile
+    container_name: ops-simulator
+    networks: [sre-net]
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      sre-agent-ecs:
+        condition: service_healthy
+      webhook-mock:
+        condition: service_healthy
+    environment:
+      AUTH_SERVICE_BASE_URL:   http://auth-service:8080
+      WEBHOOK_URL:             http://sre-agent-ecs:8000/webhook
+      CONCURRENT_THREADS:      ${CONCURRENT_THREADS:-120}
+      FLOOD_DURATION_SECONDS:  ${FLOOD_DURATION_SECONDS:-10}
+      REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-30}
+      SIMULATOR_MODE:          ${SIMULATOR_MODE:-chaos}
     restart: "no"

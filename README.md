@@ -57,11 +57,13 @@ graph TD
 ├── auth-service/               # Target Java Spring Boot app (simulates failures)
 ├── ops-simulator/              # Traffic chaos generator + webhook sender
 │   └── security/               # SecurityAttackSimulator (prompt injection tests)
-├── sre-agent-lambda/           # AWS Lambda — the AI agent brain
-│   ├── lambda_function.py      # Multi-agent pipeline (Triage → Investigate → Remediate)
-│   └── requirements.txt
+├── sre-agent-ecs/              # Autonomous SRE Agent — FastAPI + Bedrock + MCP
+│   ├── main.py                 # Multi-agent pipeline (Triage → Investigate → Remediate)
+│   ├── mcp_client.py           # Datadog MCP subprocess manager (npx stdio transport)
+│   ├── requirements.txt
+│   └── Dockerfile
 ├── datadog-dashboard.json      # Import-ready Datadog Screenboard (3 widgets)
-├── docker-compose.yml          # Local dev stack
+├── docker-compose.yml          # Full local dev stack (all services)
 └── run-scenario.sh             # One-command end-to-end demo
 ```
 
@@ -84,7 +86,7 @@ java -jar ops-simulator.jar --all
 ```
 
 ### Step 2 — Lambda receives the alert
-The Lambda parses the Datadog-style JSON payload and runs it through a **PII sanitizer** that strips emails, IPs, tokens, and passwords before any data touches the LLM.
+The ECS service parses the Datadog-style JSON payload and runs it through a **PII sanitizer** that strips emails, IPs, tokens, and passwords before any data touches the LLM.
 
 ### Step 3 — Three-agent pipeline runs
 
@@ -123,8 +125,8 @@ The Lambda posts a Block Kit message to Slack with severity, affected service, r
 docker-compose up --build
 ```
 
-### 2. Configure the Lambda
-Set these environment variables on the Lambda function:
+### 2. Configure the ECS Agent
+Set these environment variables (or copy `.env.example` to `.env`):
 
 | Variable | Description |
 |---|---|
@@ -134,10 +136,10 @@ Set these environment variables on the Lambda function:
 | `DD_API_KEY` | Datadog API key |
 | `DD_SITE` | e.g. `datadoghq.com` |
 
-### 3. Install Lambda dependencies
+### 3. Install dependencies
 ```bash
-cd sre-agent-lambda
-pip install -r requirements.txt -t ./package
+cd sre-agent-ecs
+pip install -r requirements.txt
 ```
 
 ### 4. Import the Datadog dashboard
@@ -184,9 +186,9 @@ The Lambda includes a multi-layer guardrail before any data reaches Bedrock:
 |---|---|
 | Target app | Java 17, Spring Boot 3.x, Micrometer |
 | Simulator | Java 17, plain `java.net.http` |
-| Agent runtime | AWS Lambda, Python 3.11 |
+| Agent runtime | ECS (Docker), FastAPI, Python 3.11 |
 | LLM | Amazon Bedrock (Claude 3.5 / 3.7 Sonnet) |
-| Tool calling | Datadog MCP Server |
+| Tool calling | Datadog MCP Server (`npx @datadog/mcp-server-datadog`) |
 | Observability | Datadog APM + LLM Observability (`ddtrace`) |
 | Notifications | Slack Incoming Webhooks |
 
