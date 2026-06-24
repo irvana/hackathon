@@ -146,7 +146,7 @@
               {
                 "name": "query_llm_latency",
                 "data_source": "metrics",
-                "query": "p99:aws.bedrock.invocation.latency{service:sre-agent-lambda}"
+                "query": "p99:aws.bedrock.invocation.latency{service:sre-agent-ecs}"
               }
             ],
             "response_format": "timeseries",
@@ -168,7 +168,7 @@
               {
                 "name": "query_input_tokens",
                 "data_source": "metrics",
-                "query": "avg:aws.bedrock.invocation.input_token_count{service:sre-agent-lambda}"
+                "query": "avg:aws.bedrock.invocation.input_token_count{service:sre-agent-ecs}"
               }
             ],
             "response_format": "timeseries",
@@ -190,7 +190,7 @@
               {
                 "name": "query_output_tokens",
                 "data_source": "metrics",
-                "query": "avg:aws.bedrock.invocation.output_token_count{service:sre-agent-lambda}"
+                "query": "avg:aws.bedrock.invocation.output_token_count{service:sre-agent-ecs}"
               }
             ],
             "response_format": "timeseries",
@@ -212,12 +212,12 @@
               {
                 "name": "query_llm_errors",
                 "data_source": "metrics",
-                "query": "sum:aws.bedrock.invocation.client_errors{service:sre-agent-lambda}.as_count()"
+                "query": "sum:aws.bedrock.invocation.client_errors{service:sre-agent-ecs}.as_count()"
               },
               {
                 "name": "query_llm_total",
                 "data_source": "metrics",
-                "query": "sum:aws.bedrock.invocations{service:sre-agent-lambda}.as_count()"
+                "query": "sum:aws.bedrock.invocations{service:sre-agent-ecs}.as_count()"
               }
             ],
             "response_format": "timeseries",
@@ -255,10 +255,7 @@
       "id": 3,
       "definition": {
         "type": "note",
-        "title": "📋 Live Postmortem – SRE Agent Incident Feed",
-        "title_size": "16",
-        "title_align": "left",
-        "content": "## 🔍 Incident Status: Awaiting Agent Report\n\n---\n\n**Last Updated:** _Agent has not reported yet_\n\n**Alert ID:** _pending_\n\n**Service:** `auth-service`\n\n---\n\n### Root Cause\n> _The SRE Agent will populate this section automatically after investigation._\n\n### Evidence\n- Log signals: _pending_\n- Metric signals: _pending_\n- Tool calls executed: _pending_\n\n### Recommended Remediation Steps\n1. _Awaiting agent runbook..._\n2. _Awaiting agent runbook..._\n3. _Awaiting agent runbook..._\n\n---\n\n### How to Update This Widget\nPost the agent's `incident_summary` field here via the [Datadog Dashboard API](https://docs.datadoghq.com/api/latest/dashboards/) or update it manually after each Lambda run.\n\n```\nPATCH /api/v1/dashboard/{dashboard_id}\n{ \"widgets[2].definition.content\": \"<agent output>\" }\n```\n\n---\n_Powered by Self-Healing Shadow · Amazon Bedrock · ddtrace_",
+        "content": "## 📋 Live Postmortem – SRE Agent Incident Feed\n\n---\n\n**Last Updated:** _Agent has not reported yet_\n\n**Alert ID:** _pending_\n\n**Service:** `auth-service`\n\n---\n\n### Root Cause\n> _The SRE Agent will populate this section automatically after investigation._\n\n### Evidence\n- Log signals: _pending_\n- Metric signals: _pending_\n- Tool calls executed: _pending_\n\n### Recommended Remediation Steps\n1. _Awaiting agent runbook..._\n2. _Awaiting agent runbook..._\n3. _Awaiting agent runbook..._\n\n---\n\n### How to Update This Widget\nPost the agent's `incident_summary` field here via the [Datadog Dashboard API](https://docs.datadoghq.com/api/latest/dashboards/) or update it manually after each ECS run.\n\n```\nPUT /api/v1/dashboard/{dashboard_id}\n{ \"widgets[2].definition.content\": \"<agent output>\" }\n```\n\n---\n_Powered by Self-Healing Shadow · Amazon Bedrock · ddtrace_",
         "background_color": "white",
         "font_size": "14",
         "text_align": "left",
